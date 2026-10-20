@@ -32,7 +32,7 @@ class Friendly extends Error {
 
 function sh(cmd, cwd = src, env = {}) {
   console.log(`\n$ ${cmd}   (in ${path.relative(process.cwd(), cwd) || "."})`);
-  const r = spawnSync(cmd, { cwd, shell: true, stdio: "inherit", env: { ...process.env, CI: "true", ...env } });
+  const r = spawnSync(cmd, { cwd, shell: true, stdio: "inherit", env: { ...process.env, CI: "true", npm_config_engine_strict: "false", ...env } });
   if (r.status !== 0) throw new Error(`Command failed (${r.status}): ${cmd}`);
 }
 

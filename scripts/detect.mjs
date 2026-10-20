@@ -124,6 +124,21 @@ function licenseFile() {
   return ls().find((f) => /^(licen[sc]e|copying)(\.(md|txt))?$/i.test(f)) || null;
 }
 
+/** The Node version the project asks for (.nvmrc, .node-version, engines.node), for setup-node. */
+function nodeVersion(dir = ".") {
+  const file = ["/.nvmrc", "/.node-version"].map((f) => read(path.join(dir, f))).find(Boolean);
+  const pkg = json(path.join(dir, "package.json"));
+  const spec = (file || pkg?.engines?.node || "").trim().replace(/^v/, "");
+  if (!spec) return "22";
+  if (/^(lts\/\*|lts|node|latest)$/i.test(spec)) return "22";
+  const exact = spec.match(/^[\^~=]?\s*(\d+(?:\.\d+){0,2})$/);
+  if (exact) return exact[1];
+  const min = spec.match(/>=?\s*(\d+)/);
+  if (min) return String(Math.max(22, Number(min[1])));
+  const major = spec.match(/(\d+)/);
+  return major ? major[1] : "22";
+}
+
 function base() {
   const pkg = json("package.json");
   const name = pkg?.productName || pkg?.build?.productName || pkg?.name || repoName;
@@ -134,6 +149,7 @@ function base() {
     description: pkg?.description || "",
     licenseFile: licenseFile(),
     icon: findIcon(),
+    nodeVersion: nodeVersion(),
   };
 }
 
@@ -164,6 +180,7 @@ function detect() {
       kind: "tauri",
       supported: true,
       tauri: { major: v2 ? 2 : 1, dir, appDir, cli: d["@tauri-apps/cli"] || null, hasPackageJson: !!pkg },
+      nodeVersion: nodeVersion(appDir),
       packageManager: pm,
       install: pkg ? installCmd(pm, appDir) : null,
       icon: findIcon([`${dir}/icons/icon.png`, `${dir}/icons/128x128@2x.png`]),
