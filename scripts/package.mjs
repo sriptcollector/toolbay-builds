@@ -360,7 +360,7 @@ async function build() {
       if (plan.build) step("Build the app", "The app's own build step failed.", () => sh(plan.build));
       const target = isWin ? "--win nsis --x64" : "--mac zip --arm64";
       step("Package the app", "Packaging this Electron app failed. It may need its own packaging setup.", () =>
-        sh(`${plan.electron?.hasBuilder ? "npx electron-builder" : "npx -y electron-builder@25"} ${target} --publish never -c.directories.output=tb-dist -c.nsis.oneClick=true -c.nsis.perMachine=false`, src, { CSC_IDENTITY_AUTO_DISCOVERY: "false" }),
+        sh(`${plan.electron?.hasBuilder ? "npx electron-builder" : "npx -y electron-builder@25"} ${target} --publish never -c.directories.output=tb-dist -c.nsis.oneClick=true -c.nsis.perMachine=false -c.nsis.allowToChangeInstallationDirectory=false`, src, { CSC_IDENTITY_AUTO_DISCOVERY: "false" }),
       );
       const dist = path.join(src, "tb-dist");
       if (isWin) {
