@@ -63,6 +63,12 @@ function zipDir(dir, zipPath) {
   }
 }
 
+/** Unpack a .zip/.tar.gz with the system tar (bsdtar on Windows; Git's GNU tar can't read C:\ paths). */
+function untar(file, dest) {
+  const tar = isWin ? path.join(process.env.SystemRoot || "C:\Windows", "System32", "tar.exe") : "tar";
+  execFileSync(tar, ["-x", "-f", file, "-C", dest], { stdio: "inherit" });
+}
+
 function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
@@ -189,13 +195,13 @@ async function bundleNode(dest) {
   if (isWin) {
     const zip = path.join(work, "node.zip");
     await fetchTo(`https://nodejs.org/dist/${ver}/node-${ver}-win-${arch}.zip`, zip);
-    execFileSync(path.join(process.env.SystemRoot || "C:\Windows", "System32", "tar.exe"), ["-x", "-f", zip, "-C", work], { stdio: "inherit" });
+    untar(zip, work);
     fs.mkdirSync(dest, { recursive: true });
     fs.copyFileSync(path.join(work, `node-${ver}-win-${arch}`, "node.exe"), path.join(dest, "node.exe"));
   } else {
     const tgz = path.join(work, "node.tgz");
     await fetchTo(`https://nodejs.org/dist/${ver}/node-${ver}-darwin-${arch}.tar.gz`, tgz);
-    execSync(`tar -xzf "${tgz}" -C "${work}"`, { stdio: "inherit" });
+    untar(tgz, work);
     fs.mkdirSync(dest, { recursive: true });
     fs.copyFileSync(path.join(work, `node-${ver}-darwin-${arch}`, "bin", "node"), path.join(dest, "node"));
     fs.chmodSync(path.join(dest, "node"), 0o755);
@@ -212,7 +218,7 @@ async function bundlePython(dest) {
   if (!asset) throw new Error("no python build found");
   const tgz = path.join(work, "python.tgz");
   await fetchTo(asset.browser_download_url, tgz);
-  execSync(`tar -xzf "${tgz}" -C "${work}"`, { stdio: "inherit" });
+  untar(tgz, work);
   fs.renameSync(path.join(work, "python"), dest);
   return isWin ? path.join(dest, "python.exe") : path.join(dest, "bin", "python3");
 }
@@ -290,7 +296,9 @@ async function build() {
 
     case "python-cli": {
       const pyDir = path.join(work, "python");
-      const py = await step("Get Python", "Toolbay couldn't download Python for this tool.", () => bundlePython(pyDir));
+      const py = await bundlePython(pyDir).catch((e) => {
+        throw new Friendly("Toolbay couldn't download Python for this tool. Try again in a few minutes.", String(e));
+      });
       step("Install the tool", "Installing this Python project's requirements failed.", () => {
         if (plan.python.requirements) sh(`"${py}" -m pip install --no-warn-script-location -r ${plan.python.requirements}`);
         if (plan.python.installable) sh(`"${py}" -m pip install --no-warn-script-location .`);
