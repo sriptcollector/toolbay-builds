@@ -127,7 +127,10 @@ jobs:
           echo "ok=$([ "$blocked" = "false" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           jq -n --slurpfile p plan.json --slurpfile s privacy.json '{plan: $p[0], privacy: $s[0]}' > report.json
           icon=$(jq -r '.icon // empty' plan.json)
-          if [ -n "$icon" ] && [ -f "src/$icon" ] && head -c 8 "src/$icon" | grep -q PNG; then cp "src/$icon" icon.png; fi
+          if [ -n "$icon" ] && [ -f "src/$icon" ]; then
+            if head -c 8 "src/$icon" | grep -q PNG; then cp "src/$icon" icon.png
+            else (convert "src/$icon" -delete 1--1 icon.png || magick "src/$icon" -delete 1--1 icon.png || true) 2>/dev/null; fi
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

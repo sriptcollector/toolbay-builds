@@ -17,6 +17,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(process.argv[2] || ".");
+// The workflow checks the repo out as "src"; name things after the real repo.
+const repoName = (process.env.SOURCE_REPO || "").split("/")[1] || path.basename(root);
 const exists = (p) => fs.existsSync(path.join(root, p));
 const read = (p) => {
   try {
@@ -124,10 +126,10 @@ function licenseFile() {
 
 function base() {
   const pkg = json("package.json");
-  const name = pkg?.productName || pkg?.build?.productName || pkg?.name || path.basename(root);
+  const name = pkg?.productName || pkg?.build?.productName || pkg?.name || repoName;
   return {
     name: titleCase(name),
-    slug: slugify(pkg?.name || path.basename(root)),
+    slug: slugify(pkg?.name || repoName),
     version: /^\d+\.\d+\.\d+/.test(pkg?.version || "") && !/^0\.0\.0/.test(pkg.version) ? pkg.version : "1.0.0",
     description: pkg?.description || "",
     licenseFile: licenseFile(),
@@ -156,7 +158,7 @@ function detect() {
     const d = deps(pkg);
     return {
       ...base(),
-      name: titleCase(productName || path.basename(root)),
+      name: titleCase(productName || repoName),
       version: conf.version && /^\d/.test(conf.version) ? conf.version : conf.package?.version || base().version,
       identifier: conf.identifier || conf.tauri?.bundle?.identifier || null,
       kind: "tauri",
@@ -275,15 +277,15 @@ function detect() {
   if (pyproject || exists("setup.py") || exists("setup.cfg") || py.length) {
     const scriptsSection = pyproject?.match(/\[project\.scripts\]([\s\S]*?)(\n\[|$)/)?.[1] || "";
     const entry = scriptsSection.match(/^\s*["']?([\w.-]+)["']?\s*=\s*["']([\w.]+):(\w+)["']/m);
-    const mainPy = ["main.py", "app.py", "cli.py", "run.py", "__main__.py", `${path.basename(root)}.py`].find((f) => py.includes(f)) || (py.length === 1 ? py[0] : null);
+    const mainPy = ["main.py", "app.py", "cli.py", "run.py", "__main__.py", `${repoName}.py`].find((f) => py.includes(f)) || (py.length === 1 ? py[0] : null);
     const gui = /tkinter|PySide|PyQt|customtkinter|flet|kivy|pygame/.test(py.map((f) => read(f) || "").join("\n") + (read("requirements.txt") || "") + (pyproject || ""));
     if (!entry && !mainPy && !pyproject && !exists("setup.py")) {
       return unsupported("Toolbay found Python files but no clear way to start the program (no main.py or entry point).");
     }
     return {
       ...base(),
-      name: titleCase(pyproject?.match(/^name\s*=\s*["']([^"']+)/m)?.[1] || path.basename(root)),
-      slug: slugify(pyproject?.match(/^name\s*=\s*["']([^"']+)/m)?.[1] || path.basename(root)),
+      name: titleCase(pyproject?.match(/^name\s*=\s*["']([^"']+)/m)?.[1] || repoName),
+      slug: slugify(pyproject?.match(/^name\s*=\s*["']([^"']+)/m)?.[1] || repoName),
       description: pyproject?.match(/^description\s*=\s*["']([^"']+)/m)?.[1] || "",
       kind: "python-cli",
       supported: true,
