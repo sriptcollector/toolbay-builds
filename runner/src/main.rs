@@ -366,15 +366,31 @@ fn main() {
                 "cli" => WebviewUrl::App("cli.html".into()),
                 _ => WebviewUrl::CustomProtocol(tb("/")),
             };
+            // Hidden until the first page has loaded, so there's no blank white flash.
             let mut b = WebviewWindowBuilder::new(app, "main", url)
                 .title(&title)
                 .inner_size(w, h)
                 .min_inner_size(420.0, 320.0)
-                .center();
+                .center()
+                .visible(false)
+                .on_page_load(|win, payload| {
+                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                });
             if let Some(d) = data_dir(&cfg.id) {
                 b = b.data_directory(d);
             }
             let win = b.build()?;
+            // Show it anyway if the page is slow, so the app never seems not to open.
+            let fallback = win.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(4));
+                if !fallback.is_visible().unwrap_or(true) {
+                    let _ = fallback.show();
+                }
+            });
 
             if cfg.mode == "server" {
                 let port = free_port();
