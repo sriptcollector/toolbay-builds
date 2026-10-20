@@ -149,7 +149,7 @@ jobs:
             supported=$(jq -r .supported plan.json)
             if [ "$supported" = "false" ]; then
               jq '. + {message: .plan.reason}' report.json > r.json
-              echo "::notice title=toolbay-unsupported::$(jq -r .plan.reason plan.json)"
+              echo "::notice title=toolbay-unsupported::$(jq -r .reason plan.json)"
               node tb/scripts/notify.mjs unsupported "Not supported yet" r.json
             else
               jq '. + {message: .privacy.summary}' report.json > r.json
