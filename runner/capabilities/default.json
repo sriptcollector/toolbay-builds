@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The launcher page for command-line tools may call the runner's own commands; web apps get nothing.",
+  "windows": ["main"],
+  "local": true,
+  "remote": { "urls": [] },
+  "permissions": ["core:default"]
+}

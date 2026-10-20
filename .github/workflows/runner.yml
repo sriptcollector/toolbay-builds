@@ -1,0 +1,69 @@
+# Build the Toolbay runner (runner/) for Windows and Mac and publish it as release runner-v1.
+# The build workflow wraps web apps and command-line tools with it.
+name: runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [runner/**]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: macos-14
+            platform: darwin-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner -> target
+      - name: Test
+        working-directory: runner
+        run: cargo test --release
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: runner
+        shell: bash
+        run: |
+          cargo build --release
+          mkdir -p ../dist && cp target/release/toolbay-runner.exe ../dist/
+          cd ../dist && 7z a ../toolbay-runner-${{ matrix.platform }}.zip toolbay-runner.exe
+      - name: Build (Mac)
+        if: runner.os == 'macOS'
+        working-directory: runner
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri build --bundles app
+          cd target/release/bundle/macos
+          ditto -c -k --keepParent "Toolbay App.app" "$GITHUB_WORKSPACE/toolbay-runner-${{ matrix.platform }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runner-${{ matrix.platform }}
+          path: toolbay-runner-${{ matrix.platform }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: |
+          if ! gh release view runner-v1 -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create runner-v1 -R "$GITHUB_REPOSITORY" --title "Toolbay runner v1" --notes "The shell that opens web apps and command-line tools as desktop apps. Built from runner/." --latest=false
+          fi
+          gh release upload runner-v1 -R "$GITHUB_REPOSITORY" dist/*.zip --clobber

@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Toolbay</title>
+<style>
+:root{--canvas:#0a0a0a;--deep:#050505;--card:#141414;--line:#232323;--line2:#2f2f2f;--bright:#fafafa;--text:#ededed;--muted:#909090;--accent:#8b6dff;--danger:#f85149}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--canvas);color:var(--text);font:14px "Segoe UI",system-ui,sans-serif}
+body{display:flex;flex-direction:column;padding:22px 24px;gap:14px}
+h1{margin:0;font-size:24px;color:var(--bright);font-weight:600}
+p.desc{margin:4px 0 0;color:var(--muted);line-height:1.45}
+.row{display:flex;gap:8px}
+input{flex:1;background:var(--card);border:1px solid var(--line2);color:var(--text);border-radius:10px;padding:10px 12px;font:13px Consolas,ui-monospace,monospace;outline:none}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(139,109,255,.18)}
+button{background:var(--bright);color:var(--canvas);border:0;border-radius:10px;padding:0 18px;font-weight:600;font-size:13px;cursor:pointer}
+button.ghost{background:var(--card);color:var(--text);border:1px solid var(--line2)}
+button:disabled{opacity:.5;cursor:default}
+.hint{color:var(--muted);font-size:12px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:#262626;border-radius:6px;padding:4px 8px;font:12px Consolas,monospace;cursor:pointer;color:var(--text)}
+pre{flex:1;margin:0;background:var(--deep);border:1px solid var(--line);border-radius:14px;padding:14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12.5px/1.5 Consolas,ui-monospace,monospace;color:#d4d4d4}
+pre .err{color:#ffb4ae}
+pre .sys{color:var(--muted)}
+.status{font-size:12px;color:var(--muted)}
+.status.on{color:var(--accent)}
+</style>
+</head>
+<body>
+<div>
+  <h1 id="name">Loading…</h1>
+  <p class="desc" id="desc"></p>
+</div>
+<div class="row">
+  <input id="args" placeholder="Options (optional)" spellcheck="false" autofocus>
+  <button id="run">Run</button>
+  <button id="stop" class="ghost" disabled>Stop</button>
+</div>
+<div class="chips" id="examples"></div>
+<pre id="out"><span class="sys">Press Run to start. What the tool prints shows up here.</span></pre>
+<div class="row">
+  <input id="input" placeholder="Type a reply to the tool and press Enter" spellcheck="false" disabled>
+</div>
+<div class="status" id="status">Ready</div>
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (id) => document.getElementById(id);
+const out = $("out");
+let running = false;
+
+function add(text, cls) {
+  const s = document.createElement("span");
+  if (cls) s.className = cls;
+  s.textContent = text + "\n";
+  out.appendChild(s);
+  out.scrollTop = out.scrollHeight;
+}
+function setRunning(on) {
+  running = on;
+  $("run").disabled = on; $("stop").disabled = !on; $("input").disabled = !on;
+  $("status").textContent = on ? "Running…" : "Ready";
+  $("status").className = "status" + (on ? " on" : "");
+  if (on) $("input").focus();
+}
+async function run() {
+  out.textContent = "";
+  try { await invoke("cli_run", { args: $("args").value }); setRunning(true); }
+  catch (e) { add(String(e), "err"); }
+}
+invoke("cli_info").then((i) => {
+  $("name").textContent = i.name; document.title = i.name;
+  $("desc").textContent = i.description || "";
+  if (i.argsHint) $("args").placeholder = i.argsHint;
+  for (const ex of i.examples || []) {
+    const c = document.createElement("span"); c.className = "chip"; c.textContent = ex;
+    c.onclick = () => { $("args").value = ex; $("args").focus(); };
+    $("examples").appendChild(c);
+  }
+});
+listen("cli-output", (e) => add(e.payload.line, e.payload.kind === "err" ? "err" : ""));
+listen("cli-exit", (e) => {
+  add(e.payload === 0 ? "Finished." : e.payload === null ? "Stopped." : `Finished with code ${e.payload}.`, "sys");
+  setRunning(false);
+});
+$("run").onclick = run;
+$("stop").onclick = () => invoke("cli_stop");
+$("args").addEventListener("keydown", (e) => { if (e.key === "Enter" && !running) run(); });
+$("input").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const v = e.target.value; e.target.value = ""; add("> " + v, "sys");
+  invoke("cli_input", { line: v }).catch((err) => add(String(err), "err"));
+});
+</script>
+</body>
+</html>

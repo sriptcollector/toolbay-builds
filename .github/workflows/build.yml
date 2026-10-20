@@ -1,0 +1,309 @@
+# Turn one GitHub repo (pinned to a commit) into a Toolbay desktop app.
+# Started by toolbay.ai (POST /api/v1/projects) through the GitHub API, or by hand:
+#   gh workflow run build.yml -R sriptcollector/toolbay-builds -f build_id=test1 -f repo=owner/name -f sha=<commit>
+#
+# 1. inspect  (Linux)  detect the project type, check the license, run the privacy and security check.
+#                      Stops here, before running any of the project's code, if it isn't safe or supported.
+# 2. build    (Windows + Mac)  run the project's build and package it. No secrets reach this job:
+#                      it runs untrusted code with a read-only token.
+# 3. publish  (Linux)  attach the files and toolbay.json to release b-<build_id> and tell toolbay.ai.
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: Toolbay build id (letters, digits, - and _)
+        required: true
+      repo:
+        description: Source repo, owner/name
+        required: true
+      sha:
+        description: Commit to build (full SHA)
+        required: true
+      callback_url:
+        description: Where to report progress (https://toolbay.ai/api/v1/builds/webhook)
+        required: false
+        default: ""
+
+run-name: "build ${{ inputs.build_id }}: ${{ inputs.repo }}@${{ inputs.sha }}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ inputs.build_id }}
+  cancel-in-progress: false
+
+env:
+  BUILD_ID: ${{ inputs.build_id }}
+  SOURCE_REPO: ${{ inputs.repo }}
+  SOURCE_SHA: ${{ inputs.sha }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      ok: ${{ steps.verdict.outputs.ok }}
+    env:
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      WEBHOOK_SECRET: ${{ secrets.TOOLBAY_WEBHOOK_SECRET }}
+    steps:
+      - name: Check inputs
+        run: |
+          [[ "$BUILD_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo "bad build_id"; exit 1; }
+          [[ "$SOURCE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full 40-character commit"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          path: tb
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: node tb/scripts/notify.mjs checking "Checking the project"
+
+      - name: Get the source at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.sha }}
+          path: src
+          persist-credentials: false
+          submodules: recursive
+          lfs: false
+
+      - name: Detect the project type
+        id: plan
+        run: |
+          node tb/scripts/detect.mjs src > plan.json
+          cat plan.json
+          echo "plan=$(jq -c . plan.json)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '[.platforms // [] | .[] | if . == "windows-x86_64" then {platform: ., os: "windows-latest"} else {platform: ., os: "macos-14"} end]' plan.json)" >> "$GITHUB_OUTPUT"
+
+      - name: License (from GitHub)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          spdx=$(gh api "repos/$SOURCE_REPO/license" --jq .license.spdx_id 2>/dev/null || true)
+          echo "LICENSE_SPDX=$spdx" >> "$GITHUB_ENV"
+          echo "GitHub says: ${spdx:-none}"
+
+      - name: Secret scan (gitleaks)
+        continue-on-error: true
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks dir src --report-format json --report-path gitleaks.json --redact --exit-code 0 --no-banner || echo '[]' > gitleaks.json
+
+      - name: Dependency audit (osv-scanner)
+        continue-on-error: true
+        run: |
+          curl -sSL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v1.9.2/osv-scanner_linux_amd64
+          chmod +x osv-scanner
+          ./osv-scanner --format json --recursive src > osv.json || true
+          [ -s osv.json ] || echo '{"results":[]}' > osv.json
+
+      - name: Malware scan (ClamAV)
+        continue-on-error: true
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y clamav > /dev/null
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam --quiet || true
+          clamscan -r --infected --no-summary --exclude-dir='^src/\.git$' src > clamav.txt || true
+          cat clamav.txt
+
+      - name: Privacy and security check
+        id: verdict
+        run: |
+          node tb/scripts/scan.mjs src plan.json privacy.json
+          blocked=$(jq -r .blocked privacy.json)
+          echo "ok=$([ "$blocked" = "false" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          jq -n --slurpfile p plan.json --slurpfile s privacy.json '{plan: $p[0], privacy: $s[0]}' > report.json
+          icon=$(jq -r '.icon // empty' plan.json)
+          if [ -n "$icon" ] && [ -f "src/$icon" ] && head -c 8 "src/$icon" | grep -q PNG; then cp "src/$icon" icon.png; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inspect
+          path: |
+            plan.json
+            privacy.json
+            report.json
+            icon.png
+
+      - name: Report
+        run: |
+          if [ "${{ steps.verdict.outputs.ok }}" = "true" ]; then
+            node tb/scripts/notify.mjs building "Building the app" report.json
+          else
+            supported=$(jq -r .supported plan.json)
+            if [ "$supported" = "false" ]; then
+              jq '. + {message: .plan.reason}' report.json > r.json
+              node tb/scripts/notify.mjs unsupported "Not supported yet" r.json
+            else
+              jq '. + {message: .privacy.summary}' report.json > r.json
+              node tb/scripts/notify.mjs failed "Didn't pass the safety check" r.json
+            fi
+          fi
+
+  build:
+    needs: inspect
+    if: needs.inspect.outputs.ok == 'true' && needs.inspect.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.inspect.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tb
+          persist-credentials: false
+
+      - name: Get the source at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.sha }}
+          path: src
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: inspect
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rust (Tauri apps)
+        if: fromJSON(needs.inspect.outputs.plan).kind == 'tauri'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        if: fromJSON(needs.inspect.outputs.plan).kind == 'tauri'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/${{ fromJSON(needs.inspect.outputs.plan).tauri.dir }} -> target
+          key: ${{ inputs.repo }}
+
+      - name: Get the Toolbay runner
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p runner
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            gh release download runner-v1 -R "$GITHUB_REPOSITORY" -p toolbay-runner-windows-x86_64.zip -D runner
+            cd runner && 7z x -y toolbay-runner-windows-x86_64.zip > /dev/null
+          else
+            gh release download runner-v1 -R "$GITHUB_REPOSITORY" -p toolbay-runner-darwin-aarch64.zip -D runner
+            cd runner && ditto -x -k toolbay-runner-darwin-aarch64.zip .
+          fi
+          ls -la
+
+      - name: Build and package
+        shell: bash
+        run: node tb/scripts/package.mjs plan.json src runner out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  publish:
+    needs: [inspect, build]
+    if: always() && needs.inspect.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      WEBHOOK_SECRET: ${{ secrets.TOOLBAY_WEBHOOK_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tb
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Build outputs come from untrusted code, so the plan and privacy report are taken
+      # only from the inspect job's own artifact, never from the build folders.
+      - uses: actions/download-artifact@v4
+        with:
+          name: inspect
+          path: insp
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: art
+          merge-multiple: true
+
+      - name: Publish the release
+        id: pub
+        run: |
+          ls -la art insp
+          rm -f art/plan.json art/privacy.json art/report.json art/toolbay.json
+          if ! ls art/entry-*.json > /dev/null 2>&1; then
+            msg=$(jq -rs 'map(.message) | unique | join(" ")' art/error-*.json 2>/dev/null || true)
+            [ -n "$msg" ] || msg="The build didn't finish. Please try again."
+            detail=$(jq -rs 'map("[\(.platform)] \(.detail)") | join("\n\n")' art/error-*.json 2>/dev/null | tail -c 6000 || true)
+            jq -n --arg m "$msg" --arg d "$detail" --slurpfile r insp/report.json '$r[0] + {message: $m, errorDetail: $d}' > r.json
+            node tb/scripts/notify.mjs failed "Build failed" r.json
+            exit 1
+          fi
+          tag="b-$BUILD_ID"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
+          node tb/scripts/manifest.mjs insp/plan.json art "$base" art/toolbay.json
+          cp insp/privacy.json art/privacy.json
+          files=(art/toolbay.json art/privacy.json)
+          [ -e insp/icon.png ] && files+=(insp/icon.png)
+          for f in art/*.zip art/*.exe art/*.dmg art/*.msi; do [ -e "$f" ] && files+=("$f"); done
+          notes=$(printf 'Toolbay build of https://github.com/%s at %s\n\nPrivacy check: %s\n\nBuilt by %s' "$SOURCE_REPO" "$SOURCE_SHA" "$(jq -r .summary insp/privacy.json)" "$RUN_URL")
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then gh release delete "$tag" -R "$GITHUB_REPOSITORY" -y --cleanup-tag; fi
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "$(jq -r .name insp/plan.json) $(jq -r .version insp/plan.json) ($BUILD_ID)" --notes "$notes" --target main --latest=false "${files[@]}"
+          partial=$(ls art/error-*.json 2>/dev/null | wc -l)
+          jq -n --arg u "$base/toolbay.json" --slurpfile m art/toolbay.json --slurpfile r insp/report.json --argjson partial "$partial" \
+            --arg icon "$( [ -e insp/icon.png ] && echo "$base/icon.png" )"             '$r[0] + {manifestUrl: $u, iconUrl: (if $icon == "" then null else $icon end), manifest: $m[0], message: (if $partial > 0 then "Built for some computers only." else null end)}' > r.json
+          node tb/scripts/notify.mjs ready "Ready to install" r.json
+
+      - name: Report a crash
+        if: failure() && steps.pub.outcome != 'failure'
+        run: node tb/scripts/notify.mjs failed "Build failed"
+
+  # inspect itself crashed (not a normal "unsupported" or "failed check" result).
+  inspect-crashed:
+    needs: inspect
+    if: failure() && needs.inspect.result == 'failure'
+    runs-on: ubuntu-latest
+    env:
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      WEBHOOK_SECRET: ${{ secrets.TOOLBAY_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tb
+          persist-credentials: false
+      - run: |
+          echo '{"message":"Toolbay couldn'"'"'t read this repo. Check that it is public and the link is right, then try again."}' > r.json
+          node tb/scripts/notify.mjs failed "Couldn't read the repo" r.json
