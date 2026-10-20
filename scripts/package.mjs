@@ -56,7 +56,7 @@ function zipDir(dir, zipPath) {
   fs.rmSync(zipPath, { force: true });
   if (isWin) {
     // tar on Windows 10+ is bsdtar and writes real zips with -a.
-    const tar = path.join(process.env.SystemRoot || "C:\Windows", "System32", "tar.exe");
+    const tar = path.join(process.env.SystemRoot || "C:/Windows", "System32", "tar.exe");
     execFileSync(tar, ["-a", "-c", "-f", zipPath, "-C", dir, ...fs.readdirSync(dir)], { stdio: "inherit" });
   } else {
     execSync(`cd "${dir}" && zip -qry "${zipPath}" .`, { stdio: "inherit", shell: "/bin/bash" });
@@ -65,7 +65,7 @@ function zipDir(dir, zipPath) {
 
 /** Unpack a .zip/.tar.gz with the system tar (bsdtar on Windows; Git's GNU tar can't read C:\ paths). */
 function untar(file, dest) {
-  const tar = isWin ? path.join(process.env.SystemRoot || "C:\Windows", "System32", "tar.exe") : "tar";
+  const tar = isWin ? path.join(process.env.SystemRoot || "C:/Windows", "System32", "tar.exe") : "tar";
   execFileSync(tar, ["-x", "-f", file, "-C", dest], { stdio: "inherit" });
 }
 
