@@ -279,7 +279,8 @@ jobs:
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
           node tb/scripts/manifest.mjs insp/plan.json art "$base" art/toolbay.json
           cp insp/privacy.json art/privacy.json
-          files=(art/toolbay.json art/privacy.json)
+          cp insp/plan.json art/plan.json
+          files=(art/toolbay.json art/privacy.json art/plan.json)
           [ -e insp/icon.png ] && files+=(insp/icon.png)
           for f in art/*.zip art/*.exe art/*.dmg art/*.msi; do [ -e "$f" ] && files+=("$f"); done
           notes=$(printf 'Toolbay build of https://github.com/%s at %s\n\nPrivacy check: %s\n\nBuilt by %s' "$SOURCE_REPO" "$SOURCE_SHA" "$(jq -r .summary insp/privacy.json)" "$RUN_URL")
