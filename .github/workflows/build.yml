@@ -149,9 +149,11 @@ jobs:
             supported=$(jq -r .supported plan.json)
             if [ "$supported" = "false" ]; then
               jq '. + {message: .plan.reason}' report.json > r.json
+              echo "::notice title=toolbay-unsupported::$(jq -r .plan.reason plan.json)"
               node tb/scripts/notify.mjs unsupported "Not supported yet" r.json
             else
               jq '. + {message: .privacy.summary}' report.json > r.json
+              echo "::notice title=toolbay-failed::$(jq -r .summary privacy.json)"
               node tb/scripts/notify.mjs failed "Didn't pass the safety check" r.json
             fi
           fi
@@ -272,6 +274,7 @@ jobs:
             [ -n "$msg" ] || msg="The build didn't finish. Please try again."
             detail=$(jq -rs 'map("[\(.platform)] \(.detail)") | join("\n\n")' art/error-*.json 2>/dev/null | tail -c 6000 || true)
             jq -n --arg m "$msg" --arg d "$detail" --slurpfile r insp/report.json '$r[0] + {message: $m, errorDetail: $d}' > r.json
+            echo "::notice title=toolbay-failed::$msg"
             node tb/scripts/notify.mjs failed "Build failed" r.json
             exit 1
           fi
