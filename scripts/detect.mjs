@@ -210,7 +210,8 @@ function detect() {
       packageManager: pm,
       install: installCmd(pm),
       build: scripts.build ? runScript(pm, "build") : null,
-      electron: { builder, main: pkg.main || null },
+      // Use the project's own electron-builder when it has one (its config matches that version).
+      electron: { builder, main: pkg.main || null, hasBuilder: !!d["electron-builder"] },
       icon: findIcon(["build/icon.png", "build/icons/512x512.png"]),
       platforms: ["windows-x86_64", "darwin-aarch64"],
     };
