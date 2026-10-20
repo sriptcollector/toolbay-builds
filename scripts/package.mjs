@@ -368,7 +368,13 @@ async function build() {
         if (!exe) throw new Friendly("The app built, but Toolbay couldn't find the Windows installer.");
         const asset = `${assetBase}-setup.exe`;
         fs.copyFileSync(path.join(dist, exe), path.join(out, asset));
-        return { kind: "nsis", asset, silentArgs: ["/S", "/currentuser"] };
+        const product = plan.electron?.productName;
+        return {
+          kind: "nsis",
+          asset,
+          silentArgs: ["/S", "/currentuser"],
+          ...(product ? { exe: `${product}.exe`, uninstaller: `Uninstall ${product}.exe` } : {}),
+        };
       }
       const zip = fs.readdirSync(dist).find((f) => f.endsWith(".zip"));
       if (!zip) throw new Friendly("The app built, but Toolbay couldn't find the Mac app.");

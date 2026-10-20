@@ -211,7 +211,13 @@ function detect() {
       install: installCmd(pm),
       build: scripts.build ? runScript(pm, "build") : null,
       // Use the project's own electron-builder when it has one (its config matches that version).
-      electron: { builder, main: pkg.main || null, hasBuilder: !!d["electron-builder"] },
+      electron: {
+        builder,
+        main: pkg.main || null,
+        hasBuilder: !!d["electron-builder"],
+        // electron-builder names the program and uninstaller after this.
+        productName: (typeof pkg.build === "object" && pkg.build?.productName) || pkg.productName || pkg.name,
+      },
       icon: findIcon(["build/icon.png", "build/icons/512x512.png"]),
       platforms: ["windows-x86_64", "darwin-aarch64"],
     };
