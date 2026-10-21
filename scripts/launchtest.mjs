@@ -188,7 +188,13 @@ async function main() {
 try {
   await main();
 } catch (e) {
-  result.note = result.installs ? `It didn't open: ${e.message}` : `It didn't install: ${e.message}`;
+  // Plain words for people; the technical reason stays in the build log.
+  console.log(`launch test error: ${e.message}`);
+  result.note = result.installs
+    ? "It installed, but didn't open."
+    : entry.kind === "nsis"
+      ? "Its installer didn't finish installing quietly (it may need administrator rights or ask questions)."
+      : "It didn't install.";
 }
 result.seconds = Math.round((Date.now() - t0) / 1000);
 fs.writeFileSync(path.join(out, `compat-${platform}.json`), JSON.stringify(result, null, 2));
