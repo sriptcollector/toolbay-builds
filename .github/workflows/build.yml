@@ -219,8 +219,16 @@ jobs:
           ls -la
 
       - name: Build and package
+        id: pkg
         shell: bash
         run: node tb/scripts/package.mjs plan.json src runner out
+
+      # Compatibility check: install it like the hub does, open it, screenshot, close, uninstall.
+      # A build that doesn't open is not published for this computer.
+      - name: Launch test
+        if: steps.pkg.outcome == 'success'
+        shell: bash
+        run: node tb/scripts/launchtest.mjs out
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -273,7 +281,8 @@ jobs:
             msg=$(jq -rs 'map(.message) | unique | join(" ")' art/error-*.json 2>/dev/null || true)
             [ -n "$msg" ] || msg="The build didn't finish. Please try again."
             detail=$(jq -rs 'map("[\(.platform)] \(.detail)") | join("\n\n")' art/error-*.json 2>/dev/null | tail -c 6000 || true)
-            jq -n --arg m "$msg" --arg d "$detail" --slurpfile r insp/report.json '$r[0] + {message: $m, errorDetail: $d}' > r.json
+            compat=$( (ls art/compat-*.json > /dev/null 2>&1 && jq -s . art/compat-*.json) || echo '[]')
+            jq -n --arg m "$msg" --arg d "$detail" --argjson c "$compat" --slurpfile r insp/report.json '$r[0] + {message: $m, errorDetail: $d, compat: $c}' > r.json
             echo "::notice title=toolbay-failed::$msg"
             node tb/scripts/notify.mjs failed "Build failed" r.json
             exit 1
@@ -282,16 +291,18 @@ jobs:
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
           node tb/scripts/manifest.mjs insp/plan.json art "$base" art/toolbay.json
           cp insp/privacy.json art/privacy.json
+          if ls art/compat-*.json > /dev/null 2>&1; then jq -s . art/compat-*.json > art/compat.json; else echo '[]' > art/compat.json; fi
           cp insp/plan.json art/plan.json
           files=(art/toolbay.json art/privacy.json art/plan.json)
           [ -e insp/icon.png ] && files+=(insp/icon.png)
-          for f in art/*.zip art/*.exe art/*.dmg art/*.msi; do [ -e "$f" ] && files+=("$f"); done
+          files+=(art/compat.json)
+          for f in art/*.zip art/*.exe art/*.dmg art/*.msi art/screenshot-*.png; do [ -e "$f" ] && files+=("$f"); done
           notes=$(printf 'Toolbay build of https://github.com/%s at %s\n\nPrivacy check: %s\n\nBuilt by %s' "$SOURCE_REPO" "$SOURCE_SHA" "$(jq -r .summary insp/privacy.json)" "$RUN_URL")
           if gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then gh release delete "$tag" -R "$GITHUB_REPOSITORY" -y --cleanup-tag; fi
           gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "$(jq -r .name insp/plan.json) $(jq -r .version insp/plan.json) ($BUILD_ID)" --notes "$notes" --target main --latest=false "${files[@]}"
           partial=$(ls art/error-*.json 2>/dev/null | wc -l)
-          jq -n --arg u "$base/toolbay.json" --slurpfile m art/toolbay.json --slurpfile r insp/report.json --argjson partial "$partial" \
-            --arg icon "$( [ -e insp/icon.png ] && echo "$base/icon.png" )"             '$r[0] + {manifestUrl: $u, iconUrl: (if $icon == "" then null else $icon end), manifest: $m[0], message: (if $partial > 0 then "Built for some computers only." else null end)}' > r.json
+          jq -n --arg u "$base/toolbay.json" --slurpfile m art/toolbay.json --slurpfile c art/compat.json --slurpfile r insp/report.json --argjson partial "$partial" \
+            --arg icon "$( [ -e insp/icon.png ] && echo "$base/icon.png" )"             '$r[0] + {compat: $c[0], manifestUrl: $u, iconUrl: (if $icon == "" then null else $icon end), manifest: $m[0], message: (if $partial > 0 then "Built for some computers only." else null end)}' > r.json
           node tb/scripts/notify.mjs ready "Ready to install" r.json
 
       - name: Report a crash
