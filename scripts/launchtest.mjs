@@ -144,7 +144,9 @@ async function main() {
   // Close politely first, like a person clicking X; force only if it ignores that.
   if (result.opens) {
     try {
-      if (isWin) execSync(`taskkill /IM "${path.basename(program)}" /T`, { stdio: "ignore" });
+      // Like clicking the window's X (taskkill without /F fails on the webview helper processes).
+      if (isWin)
+        execFileSync("powershell", ["-NoProfile", "-Command", `Get-Process -Name '${path.basename(program, ".exe")}' -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.CloseMainWindow() }`], { stdio: "ignore" });
       else execSync(`osascript -e 'tell application "${program}" to quit'`, { stdio: "ignore" });
     } catch {}
     for (let i = 0; i < 10 && running(program); i++) await sleep(1000);

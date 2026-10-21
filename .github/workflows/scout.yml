@@ -1,0 +1,37 @@
+# Daily tool scout: find good free, open-source desktop apps and send up to 5 a day to
+# toolbay.ai's "Scouted" review queue. Each one is then built and checked like an upload.
+# Nothing is published until Orion approves it in admin.
+name: scout
+
+on:
+  schedule:
+    - cron: "17 14 * * *" # daily, 14:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print the candidates
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Find candidates and send them for review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SCOUT_URL: https://toolbay.ai/api/v1/scout
+          WEBHOOK_SECRET: ${{ secrets.TOOLBAY_WEBHOOK_SECRET }}
+          SCOUT_MAX: "5"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: node scripts/scout.mjs
