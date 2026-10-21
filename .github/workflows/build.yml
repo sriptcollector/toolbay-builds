@@ -25,6 +25,10 @@ on:
         description: Where to report progress (https://toolbay.ai/api/v1/builds/webhook)
         required: false
         default: ""
+      prefer_release:
+        description: "1 = use the maintainers' official release downloads when there are any (scouted apps)"
+        required: false
+        default: "0"
 
 run-name: "build ${{ inputs.build_id }}: ${{ inputs.repo }}@${{ inputs.sha }}"
 
@@ -82,8 +86,15 @@ jobs:
 
       - name: Detect the project type
         id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFER_RELEASE: ${{ inputs.prefer_release }}
         run: |
           node tb/scripts/detect.mjs src > plan.json
+          # Official installers: for scouted apps, or anything Toolbay can't build from source.
+          if [ "$PREFER_RELEASE" = "1" ] || [ "$(jq -r .supported plan.json)" = "false" ]; then
+            node tb/scripts/prebuilt.mjs "$SOURCE_REPO" plan.json || true
+          fi
           cat plan.json
           echo "plan=$(jq -c . plan.json)" >> "$GITHUB_OUTPUT"
           echo "matrix=$(jq -c '[.platforms // [] | .[] | if . == "windows-x86_64" then {platform: ., os: "windows-latest"} else {platform: ., os: "macos-14"} end]' plan.json)" >> "$GITHUB_OUTPUT"
@@ -117,6 +128,15 @@ jobs:
           sudo systemctl stop clamav-freshclam || true
           sudo freshclam --quiet || true
           clamscan -r --infected --no-summary --exclude-dir='^src/\.git$' src > clamav.txt || true
+          # Official release downloads are scanned too, before anything installs them.
+          if jq -e '.prebuilt' plan.json > /dev/null; then
+            mkdir -p src/.toolbay-release
+            jq -r '.prebuilt.windows[0].url // empty, .prebuilt.mac[0].url // empty' plan.json | while read -r u; do
+              curl -sSL --max-filesize 1500000000 -o "src/.toolbay-release/$(basename "$u")" "$u" || true
+            done
+            clamscan -r --infected --no-summary src/.toolbay-release >> clamav.txt || true
+            rm -rf src/.toolbay-release
+          fi
           cat clamav.txt
 
       - name: Privacy and security check
@@ -221,6 +241,8 @@ jobs:
       - name: Build and package
         id: pkg
         shell: bash
+        env:
+          PREFER_RELEASE: ${{ inputs.prefer_release }}
         run: node tb/scripts/package.mjs plan.json src runner out
 
       # Compatibility check: install it like the hub does, open it, screenshot, close, uninstall.

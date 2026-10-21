@@ -10,7 +10,10 @@ const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
 const platforms = {};
 for (const f of fs.readdirSync(dir).filter((f) => /^entry-.*\.json$/.test(f))) {
   const { platform, entry } = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
-  platforms[platform] = { ...entry, url: `${base}/${encodeURIComponent(entry.asset)}` };
+  const { localPath, external, ...rest } = entry;
+  void localPath;
+  // Official release downloads stay on the maintainers' release; our own builds are on ours.
+  platforms[platform] = { ...rest, url: external ? entry.url : `${base}/${encodeURIComponent(entry.asset)}` };
 }
 if (!Object.keys(platforms).length) {
   console.error("no platform builds to publish");

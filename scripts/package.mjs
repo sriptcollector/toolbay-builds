@@ -225,7 +225,47 @@ async function bundlePython(dest) {
 
 // ---------------------------------------------------------------- kinds
 
+/** True for files that are NSIS installers (the hub runs those silently with /S /D=). */
+function isNsis(file) {
+  const buf = fs.readFileSync(file);
+  return buf.includes(Buffer.from("Nullsoft")) || buf.includes(Buffer.from("NullsoftInst"));
+}
+
+/** The maintainers' own release download (see prebuilt.mjs), verified and described for the hub. */
+async function packagePrebuilt() {
+  const list = isWin ? plan.prebuilt?.windows : plan.prebuilt?.mac;
+  if (!list?.length) throw new Friendly("The latest release has nothing Toolbay can install on this computer.");
+  const dir = path.join(work, "prebuilt");
+  fs.mkdirSync(dir, { recursive: true });
+  const notes = [];
+  for (const a of list) {
+    const file = path.join(dir, a.name);
+    await fetchTo(a.url, file);
+    const lower = a.name.toLowerCase();
+    let entry = null;
+    if (isWin && lower.endsWith(".exe")) {
+      const buf = fs.readFileSync(file);
+      if (isNsis(file)) entry = { kind: "nsis", silentArgs: ["/S"] };
+      else if (buf.includes(Buffer.from("Inno Setup"))) notes.push(`${a.name} is an Inno Setup installer, which Toolbay can't install yet`);
+      else if (/portable/.test(lower)) entry = { kind: "exe", exe: a.name };
+      else notes.push(`${a.name} isn't an installer Toolbay can run silently`);
+    } else if (lower.endsWith(".zip")) {
+      entry = { kind: "zip" };
+    } else if (!isWin && lower.endsWith(".dmg")) {
+      entry = { kind: "dmg" };
+    }
+    if (entry) {
+      // Point at the original release file; the local copy is only for the launch test.
+      return { ...entry, asset: a.name, url: a.url, localPath: file, external: true };
+    }
+  }
+  throw new Friendly(`The release's ${isWin ? "Windows" : "Mac"} download can't be installed by Toolbay yet (${notes.join("; ") || "no installer found"}).`);
+}
+
 async function build() {
+  if (plan.prebuilt && (plan.kind === "release" || process.env.PREFER_RELEASE === "1")) {
+    return step("Use the official release", "Toolbay couldn't use the app's official release download.", () => packagePrebuilt());
+  }
   switch (plan.kind) {
     case "static-web": {
       const root = path.join(src, plan.outDir || ".");
@@ -390,7 +430,7 @@ async function build() {
 
 try {
   const entry = await build();
-  const file = path.join(out, entry.asset);
+  const file = entry.localPath || path.join(out, entry.asset);
   entry.size = fs.statSync(file).size;
   entry.sha256 = sha256(file);
   fs.writeFileSync(path.join(out, `entry-${platformKey}.json`), JSON.stringify({ platform: platformKey, entry }, null, 2));

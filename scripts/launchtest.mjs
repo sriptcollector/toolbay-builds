@@ -71,11 +71,21 @@ function shallowestExe(dir) {
 }
 
 function install() {
-  const pkg = path.join(out, entry.asset);
+  const pkg = entry.localPath || path.join(out, entry.asset);
   fs.mkdirSync(installDir, { recursive: true });
   if (entry.kind === "zip") {
     if (isWin) execFileSync(tar, ["-x", "-f", pkg, "-C", installDir]);
     else execSync(`ditto -x -k "${pkg}" "${installDir}"`);
+  } else if (entry.kind === "dmg" && !isWin) {
+    const mnt = path.join(work, "mnt");
+    fs.mkdirSync(mnt, { recursive: true });
+    execSync(`hdiutil attach -nobrowse -readonly -mountpoint "${mnt}" "${pkg}"`, { stdio: "inherit" });
+    const app = fs.readdirSync(mnt).find((f) => f.endsWith(".app"));
+    if (app) execSync(`ditto "${path.join(mnt, app)}" "${path.join(installDir, app)}"`);
+    execSync(`hdiutil detach -quiet "${mnt}"`);
+    if (!app) throw new Error("the disk image has no app in it");
+  } else if (entry.kind === "exe" && isWin) {
+    fs.copyFileSync(pkg, path.join(installDir, entry.exe || path.basename(pkg)));
   } else if (entry.kind === "nsis" && isWin) {
     // Exactly like the hub: silent args, then /D= raw and unquoted (the path has a space).
     const args = [...(entry.silentArgs?.length ? entry.silentArgs : ["/S"]), `/D=${installDir}`].join(" ");
