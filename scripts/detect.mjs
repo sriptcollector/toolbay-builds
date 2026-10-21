@@ -335,5 +335,28 @@ function detect() {
   return unsupported("Toolbay couldn't recognise this project. It supports web apps, Tauri and Electron apps, and Python or Node command-line tools.");
 }
 
-const plan = detect();
+/**
+ * Uploaded Toolbay packages (toolbay.ai/docs/package) describe themselves in toolbay.json:
+ * its name, version, tagline and icon win over anything guessed from package.json.
+ * They must run on both Windows and Mac.
+ */
+function applyPackageMeta(plan) {
+  const meta = json("toolbay.json");
+  if (!meta || meta.packageSchema !== 1) return plan;
+  const out = { ...plan, package: true };
+  if (typeof meta.name === "string" && meta.name.trim()) {
+    out.name = meta.name.trim().slice(0, 60);
+    out.slug = slugify(meta.name);
+  }
+  if (typeof meta.version === "string" && /^\d+\.\d+\.\d+/.test(meta.version)) out.version = meta.version;
+  if (typeof meta.tagline === "string") out.description = meta.tagline.trim().slice(0, 140);
+  if (typeof meta.icon === "string" && exists(meta.icon.replace(/^\.?\//, "")) && !meta.icon.includes("..")) out.icon = meta.icon.replace(/^\.?\//, "");
+  if (out.supported) {
+    const both = ["windows-x86_64", "darwin-aarch64"].every((p) => (out.platforms || []).includes(p));
+    if (!both) return { ...out, kind: "unsupported", supported: false, reason: "Toolbay packages must run on both Windows and Mac. Ask your AI to make it a Tauri, Electron or web app (see toolbay.ai/docs/package)." };
+  }
+  return out;
+}
+
+const plan = applyPackageMeta(detect());
 process.stdout.write(JSON.stringify(plan, null, 2) + "\n");

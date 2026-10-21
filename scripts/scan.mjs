@@ -67,6 +67,19 @@ const TEXT_EXT = /\.(m?[jt]sx?|cjs|vue|svelte|astro|html?|css|json|rs|py|toml|ya
 const BIN_EXT = /\.(exe|dll|so|dylib|bin|msi|scr|bat|cmd|vbs|jar|apk)$/i;
 const files = [];
 const binaries = [];
+/** Windows (MZ), Linux (ELF) or Mac (Mach-O) program, whatever the file is called. */
+function magicBinary(p) {
+  try {
+    const fd = fs.openSync(p, "r");
+    const b = Buffer.alloc(4);
+    fs.readSync(fd, b, 0, 4, 0);
+    fs.closeSync(fd);
+    const m = b.readUInt32BE(0);
+    return (b[0] === 0x4d && b[1] === 0x5a) || m === 0x7f454c46 || [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(m);
+  } catch {
+    return false;
+  }
+}
 (function walk(dir, depth = 0) {
   if (depth > 12) return;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -75,7 +88,7 @@ const binaries = [];
       if (!SKIP_DIRS.has(e.name)) walk(p, depth + 1);
     } else if (e.isFile()) {
       const rel = path.relative(src, p).replace(/\\/g, "/");
-      if (BIN_EXT.test(e.name)) binaries.push(rel);
+      if (BIN_EXT.test(e.name) || magicBinary(p)) binaries.push(rel);
       else if (TEXT_EXT.test(e.name) && fs.statSync(p).size < 1_500_000) files.push(rel);
     }
   }
@@ -204,9 +217,49 @@ else
     [...critical, ...high, ...vulns.filter((v) => v.sev < 7)].slice(0, 40).map((v) => `${v.pkg}: ${v.id}${v.sev ? ` (severity ${v.sev})` : ""}`),
   );
 
+// ---- password and file stealing: code that reads saved logins, keys or wallets AND sends data out
+const SEP = String.raw`[\/\\'"\x60,\s]+`;
+const CRED = [
+  [new RegExp(String.raw`\.ssh${SEP}|\bid_rsa\b|\bid_ed25519\b|authorized_keys`, "i"), "SSH keys"],
+  [new RegExp(String.raw`\.aws${SEP}credentials`, "i"), "AWS keys"],
+  [/Login Data|Cookies['"`]|\bLocal State\b|Web Data['"`]/, "browser saved passwords or cookies"],
+  [new RegExp(String.raw`Firefox${SEP}Profiles|\blogins\.json\b|\bkey[34]\.db\b`, "i"), "Firefox saved passwords"],
+  [/Keychains?[\/\\'"`]|login\.keychain|security\s+find-(generic|internet)-password/i, "the Mac keychain"],
+  [new RegExp(String.raw`wallet\.dat|\bExodus${SEP}|\bElectrum${SEP}|nkbihfbeogaeaoehlefnkodbefgpgknn|\.ethereum${SEP}keystore`, "i"), "crypto wallets"],
+  [new RegExp(String.raw`discord${SEP}Local Storage|Telegram Desktop${SEP}tdata`, "i"), "chat app login tokens"],
+  [new RegExp(String.raw`\.git-credentials|\.docker${SEP}config\.json|\.kube${SEP}config\b`, "i"), "developer tokens"],
+];
+const EXFIL = /\b(fetch|axios|XMLHttpRequest|navigator\.sendBeacon|https?\.request|net\.connect|requests\.(post|put)|urllib\.request|httpx\.(post|put)|reqwest|WebSocket)\b|discord(app)?\.com\/api\/webhooks|api\.telegram\.org\/bot/i;
+const stealing = [];
+const touching = [];
+for (const rel of files) {
+  if (/\.(md|txt|lock)$|package-lock\.json|(^|\/)SECURITY\.md$/i.test(rel)) continue;
+  const t = fs.readFileSync(path.join(src, rel), "utf8");
+  const what = CRED.filter(([re]) => re.test(t)).map(([, w]) => w);
+  if (!what.length) continue;
+  if (EXFIL.test(t)) stealing.push(`${rel}: reads ${what.join(", ")} and sends data over the internet`);
+  else touching.push(`${rel}: reads ${what.join(", ")}`);
+}
+// Uploaded packages are blocked outright. GitHub projects (an SSH client, a Git app) can have a
+// real reason, so there it's a warning a person looks at before anything is listed.
+if (stealing.length && !plan.package)
+  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys and also connects to the internet. An admin will look at it before it's listed.", stealing.slice(0, 20));
+else if (stealing.length)
+  add("stealing", "Steals passwords or files", "failed", `The code reads ${stealing.length > 1 ? "places" : "a place"} where your computer keeps passwords or keys and sends data over the internet. Toolbay won't build or list it.`, stealing.slice(0, 20));
+else if (touching.length)
+  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys. An admin will look at it.", touching.slice(0, 20));
+else add("stealing", "Steals passwords or files", "passed", "Doesn't touch saved passwords, browser logins, keys or crypto wallets.");
+
+// ---- uploaded packages: Toolbay builds the app itself, so no prebuilt programs are allowed
+if (plan.package) {
+  if (binaries.length)
+    add("binaries", "Prebuilt programs", "failed", `The package contains ${binaries.length} prebuilt program file${binaries.length > 1 ? "s" : ""}. Toolbay builds apps from source only, so what's checked is what's shipped.`, binaries.slice(0, 20));
+  else add("binaries", "Prebuilt programs", "passed", "Source code only. Toolbay builds the app itself.");
+}
+
 const failed = checks.filter((c) => c.status === "failed");
 const warnings = checks.filter((c) => c.status === "warning");
-const blocked = !licenseOk || infected.length > 0 || !plan.supported;
+const blocked = !licenseOk || infected.length > 0 || !plan.supported || (plan.package && stealing.length > 0) || (plan.package && binaries.length > 0);
 const status = failed.length ? "failed" : "passed";
 const summary = failed.length
   ? failed.map((c) => c.summary).join(" ")

@@ -1,4 +1,5 @@
-# Turn one GitHub repo (pinned to a commit) into a Toolbay desktop app.
+# Turn one GitHub repo (pinned to a commit), or one uploaded package (a .zip of source pinned to its
+# sha256, toolbay.ai/docs/package), into a Toolbay desktop app.
 # Started by toolbay.ai (POST /api/v1/projects) through the GitHub API, or by hand:
 #   gh workflow run build.yml -R sriptcollector/toolbay-builds -f build_id=test1 -f repo=owner/name -f sha=<commit>
 #
@@ -29,6 +30,14 @@ on:
         description: "1 = use the maintainers' official release downloads when there are any (scouted apps)"
         required: false
         default: "0"
+      source_url:
+        description: "Uploaded package: https://toolbay.ai/api/v1/packages/<build_id>/source (empty = GitHub repo)"
+        required: false
+        default: ""
+      source_sha256:
+        description: Uploaded package's sha256 (taken by toolbay.ai at upload; checked before anything runs)
+        required: false
+        default: ""
 
 run-name: "build ${{ inputs.build_id }}: ${{ inputs.repo }}@${{ inputs.sha }}"
 
@@ -43,6 +52,8 @@ env:
   BUILD_ID: ${{ inputs.build_id }}
   SOURCE_REPO: ${{ inputs.repo }}
   SOURCE_SHA: ${{ inputs.sha }}
+  SOURCE_URL: ${{ inputs.source_url }}
+  SOURCE_SHA256: ${{ inputs.source_sha256 }}
   RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -60,8 +71,14 @@ jobs:
       - name: Check inputs
         run: |
           [[ "$BUILD_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo "bad build_id"; exit 1; }
-          [[ "$SOURCE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full 40-character commit"; exit 1; }
+          if [ -n "$SOURCE_URL" ]; then
+            [[ "$SOURCE_REPO" =~ ^package/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad package name"; exit 1; }
+            [[ "$SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "source_sha256 must be 64 hex characters"; exit 1; }
+            [[ "$SOURCE_URL" =~ ^https://[A-Za-z0-9.-]+/api/v1/packages/${BUILD_ID}/source$ ]] || { echo "bad source_url"; exit 1; }
+          else
+            [[ "$SOURCE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
+          fi
 
       - uses: actions/checkout@v4
         with:
@@ -74,7 +91,12 @@ jobs:
 
       - run: node tb/scripts/notify.mjs checking "Checking the project"
 
+      - name: Get the uploaded package (checks its sha256)
+        if: inputs.source_url != ''
+        run: node tb/scripts/fetch-package.mjs src
+
       - name: Get the source at the pinned commit
+        if: inputs.source_url == ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repo }}
@@ -92,7 +114,7 @@ jobs:
         run: |
           node tb/scripts/detect.mjs src > plan.json
           # Official installers: for scouted apps, or anything Toolbay can't build from source.
-          if [ "$PREFER_RELEASE" = "1" ] || [ "$(jq -r .supported plan.json)" = "false" ]; then
+          if [ -z "$SOURCE_URL" ] && { [ "$PREFER_RELEASE" = "1" ] || [ "$(jq -r .supported plan.json)" = "false" ]; }; then
             node tb/scripts/prebuilt.mjs "$SOURCE_REPO" plan.json || true
           fi
           cat plan.json
@@ -100,6 +122,7 @@ jobs:
           echo "matrix=$(jq -c '[.platforms // [] | .[] | if . == "windows-x86_64" then {platform: ., os: "windows-latest"} else {platform: ., os: "macos-14"} end]' plan.json)" >> "$GITHUB_OUTPUT"
 
       - name: License (from GitHub)
+        if: inputs.source_url == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -161,6 +184,15 @@ jobs:
             report.json
             icon.png
 
+      # The build jobs get the exact, already-checked package (they have no secret to download it).
+      - uses: actions/upload-artifact@v4
+        if: inputs.source_url != '' && steps.verdict.outputs.ok == 'true'
+        with:
+          name: source
+          path: src/
+          include-hidden-files: true
+          retention-days: 1
+
       - name: Report
         run: |
           if [ "${{ steps.verdict.outputs.ok }}" = "true" ]; then
@@ -196,6 +228,7 @@ jobs:
           persist-credentials: false
 
       - name: Get the source at the pinned commit
+        if: inputs.source_url == ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repo }}
@@ -203,6 +236,13 @@ jobs:
           path: src
           persist-credentials: false
           submodules: recursive
+
+      - name: Get the checked package
+        if: inputs.source_url != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: source
+          path: src
 
       - uses: actions/download-artifact@v4
         with:
@@ -319,7 +359,8 @@ jobs:
           [ -e insp/icon.png ] && files+=(insp/icon.png)
           files+=(art/compat.json)
           for f in art/*.zip art/*.exe art/*.dmg art/*.msi art/screenshot-*.png; do [ -e "$f" ] && files+=("$f"); done
-          notes=$(printf 'Toolbay build of https://github.com/%s at %s\n\nPrivacy check: %s\n\nBuilt by %s' "$SOURCE_REPO" "$SOURCE_SHA" "$(jq -r .summary insp/privacy.json)" "$RUN_URL")
+          if [ -n "$SOURCE_URL" ]; then what="an uploaded package ($SOURCE_REPO, sha256 $SOURCE_SHA256)"; else what="https://github.com/$SOURCE_REPO at $SOURCE_SHA"; fi
+          notes=$(printf 'Toolbay build of %s\n\nPrivacy check: %s\n\nBuilt by %s' "$what" "$(jq -r .summary insp/privacy.json)" "$RUN_URL")
           if gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then gh release delete "$tag" -R "$GITHUB_REPOSITORY" -y --cleanup-tag; fi
           gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "$(jq -r .name insp/plan.json) $(jq -r .version insp/plan.json) ($BUILD_ID)" --notes "$notes" --target main --latest=false "${files[@]}"
           partial=$(ls art/error-*.json 2>/dev/null | wc -l)
@@ -345,5 +386,10 @@ jobs:
           path: tb
           persist-credentials: false
       - run: |
-          echo '{"message":"Toolbay couldn'"'"'t read this repo. Check that it is public and the link is right, then try again."}' > r.json
-          node tb/scripts/notify.mjs failed "Couldn't read the repo" r.json
+          if [ -n "$SOURCE_URL" ]; then
+            echo '{"message":"Toolbay couldn'"'"'t open this package. Ask your AI to make the zip again (toolbay.ai/docs/package) and upload it."}' > r.json
+            node tb/scripts/notify.mjs failed "Couldn't open the package" r.json
+          else
+            echo '{"message":"Toolbay couldn'"'"'t read this repo. Check that it is public and the link is right, then try again."}' > r.json
+            node tb/scripts/notify.mjs failed "Couldn't read the repo" r.json
+          fi
