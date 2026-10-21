@@ -105,7 +105,7 @@ function plain(md) {
 function readable(p) {
   if (p.length < 60) return false;
   if (/^(table of contents|contents|install|installation|build|building|license|caution|warning|note|important|disclaimer|download|screenshots?)\b/i.test(p)) return false;
-  if (/shields\.io|badge|discord|sponsor|donate|translat|check out|latest release|click here|see below|download (it|the)|star (this|the) repo/i.test(p)) return false;
+  if (/shields\.io|badge|discord|sponsor|donate|translat|check out|latest release|click here|see below|download (it|the)|star (this|the) repo|install|homebrew|\bbrew\b|winget|scoop|\bnpm\b|apt-get|pip install|cask/i.test(p) || /:\s*$/.test(p)) return false;
   const words = p.split(/\s+/);
   const letters = (p.match(/[A-Za-z]/g) || []).length;
   return words.length >= 10 && letters / p.length > 0.7 && /[a-z]{3,} [a-z]{3,}/.test(p);
