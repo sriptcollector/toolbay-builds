@@ -93,7 +93,9 @@ function install() {
   } else {
     throw new Error(`can't test a ${entry.kind} package on this computer`);
   }
-  const target = entry.exe ? path.join(installDir, entry.exe) : shallowestExe(installDir);
+  // Like the hub: the package's program name first, else the shallowest program in the folder.
+  const named = entry.exe ? path.join(installDir, entry.exe) : null;
+  const target = named && fs.existsSync(named) ? named : shallowestExe(installDir);
   if (!target || !fs.existsSync(target)) throw new Error("installed, but the program isn't where the package says");
   result.installs = true;
   return target;

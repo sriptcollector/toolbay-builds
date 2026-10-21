@@ -86,19 +86,38 @@ function plain(md) {
   return md
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<[^>]+>/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/[*_`>#]+/g, "")
+    .replace(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, "") // linked images (badges)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // images
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // links -> their text
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1") // reference links
+    .replace(/^\s*\[[^\]]+\]:\s*\S+.*$/gm, "") // link definitions
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\[\s*\]|\(\s*\)/g, "")
+    .replace(/[*_`>#|]+/g, " ")
     .replace(/:[a-z_]+:/g, "")
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, "")
     .replace(/\s+/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
     .trim();
+}
+
+/** A paragraph that reads like a description: real sentences, not badges, links, tables or warnings. */
+function readable(p) {
+  if (p.length < 60) return false;
+  if (/^(table of contents|contents|install|installation|build|building|license|caution|warning|note|important|disclaimer|download|screenshots?)\b/i.test(p)) return false;
+  if (/shields\.io|badge|discord|sponsor|donate|translat/i.test(p)) return false;
+  const words = p.split(/\s+/);
+  const letters = (p.match(/[A-Za-z]/g) || []).length;
+  return words.length >= 10 && letters / p.length > 0.7 && /[a-z]{3,} [a-z]{3,}/.test(p);
 }
 
 /** First real paragraph of the README, in plain words. */
 function readmeIntro(md) {
-  const paras = md.split(/\n\s*\n/).map(plain).filter((p) => p.length > 60 && !/^(table of contents|contents|install|build|license)/i.test(p) && !/shields\.io|badge/i.test(p));
-  return (paras[0] || "").slice(0, 600);
+  // Skip GitHub alert blocks ("> [!CAUTION] ...", disclaimers) before reading paragraphs.
+  const para = md.split(/\n\s*\n/).filter((p) => !/^\s*>\s*\[!\w+\]/.test(p)).map(plain).find(readable) || "";
+  if (para.length <= 600) return para;
+  const cut = para.slice(0, 600);
+  return cut.slice(0, Math.max(cut.lastIndexOf(". ") + 1, 300)).trim();
 }
 
 /** Screenshot-looking images from the README (absolute URLs, no badges or logos). */
@@ -109,7 +128,7 @@ function readmeShots(md, repo, branch) {
   ];
   const out = [];
   for (let u of urls) {
-    if (/badge|shields\.io|logo|icon|sponsor|avatar|contrib|star-history|readme-stats|\.svg(\?|$)/i.test(u)) continue;
+    if (/badge|shields\.io|logo|icon|sponsor|avatar|contrib|star-history|readme-stats|ytimg|youtube|\.svg(\?|$)/i.test(u)) continue;
     if (!/\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) && !/user-attachments|githubusercontent/.test(u)) continue;
     if (!/^https?:/.test(u)) u = `https://raw.githubusercontent.com/${repo}/${branch}/${u.replace(/^\.?\//, "")}`;
     u = u.replace(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\//, "https://raw.githubusercontent.com/$1/");
@@ -186,6 +205,15 @@ async function candidate(r) {
 
 const seen = new Set();
 const found = [];
+// SCOUT_ONLY=owner/a,owner/b: just draft these (for checking drafts), no search.
+if (process.env.SCOUT_ONLY) {
+  for (const full of process.env.SCOUT_ONLY.split(",")) {
+    const r = await gh(`/repos/${full.trim()}`);
+    const c = r && (await candidate(r).catch((e) => (console.log(full, e.message), null)));
+    console.log(JSON.stringify(c ? { repo: c.repo, ...c.draft } : { repo: full, skipped: true }, null, 2));
+  }
+  process.exit(0);
+}
 for (const q of QUERIES) {
   const res = await gh(`/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=30`);
   for (const r of res?.items || []) {
