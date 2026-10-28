@@ -7,7 +7,9 @@
 //   osv.json                dependency audit (osv-scanner --format json)
 //   clamav.txt              malware scan (clamscan -r --infected)
 // Writes {status, blocked, summary, license, checks:[{id,label,status,summary,details[]}], endpoints[]}
-//   status: "passed" (nothing serious) | "failed" (do not list) ; blocked: build must not run.
+//   status: "passed" (nothing serious) | "failed" (something serious found) ; blocked: what the old
+//   policy would have blocked. Since 2026-10-27 all of this is information only: build.yml never stops
+//   on it and toolbay.ai publishes uploads without review. It shows on the tool page as the privacy result.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -169,7 +171,7 @@ else
     "permissions",
     "What it can access",
     risky.length ? "warning" : "passed",
-    risky.length ? `Asks for ${risky.length} sensitive permission${risky.length > 1 ? "s" : ""} (for example ${risky[0]}). An admin reviews these before it's listed.` : perms.length ? `Asks for ${perms.length} standard permission${perms.length > 1 ? "s" : ""}.` : "Asks for no special permissions.",
+    risky.length ? `Asks for ${risky.length} sensitive permission${risky.length > 1 ? "s" : ""} (for example ${risky[0]}). Toolbay doesn't review this.` : perms.length ? `Asks for ${perms.length} standard permission${perms.length > 1 ? "s" : ""}.` : "Asks for no special permissions.",
     [...risky.map((r) => `sensitive: ${r}`), ...perms.filter((p) => !risky.includes(p)).slice(0, 40)],
   );
 
@@ -193,8 +195,8 @@ const obfuscated = files.filter((rel) => {
   const t = fs.readFileSync(path.join(src, rel), "utf8");
   return /eval\(\s*(atob|Buffer\.from|unescape|String\.fromCharCode)\(/.test(t) || /\\x[0-9a-f]{2}(\\x[0-9a-f]{2}){200,}/i.test(t);
 });
-if (infected.length) add("malware", "Known malware", "failed", `The virus scanner flagged ${infected.length} file${infected.length > 1 ? "s" : ""}. Toolbay won't build this project.`, infected);
-else if (obfuscated.length) add("malware", "Known malware", "warning", "No known malware, but some code is deliberately hidden (obfuscated). An admin will look at it.", obfuscated.slice(0, 20));
+if (infected.length) add("malware", "Known malware", "failed", `The virus scanner flagged ${infected.length} file${infected.length > 1 ? "s" : ""}.`, infected);
+else if (obfuscated.length) add("malware", "Known malware", "warning", "No known malware, but some code is deliberately hidden (obfuscated).", obfuscated.slice(0, 20));
 else add("malware", "Known malware", clam === null ? "warning" : "passed", clam === null ? "The virus scan didn't run." : "No known malware found.", binaries.length ? binaries.slice(0, 20).map((b) => `includes a program file: ${b}`) : []);
 
 // ---- dependencies with known vulnerabilities
@@ -213,7 +215,7 @@ else
     "dependencies",
     "Outdated or unsafe libraries",
     critical.length ? "warning" : "passed",
-    `${vulns.length} librar${vulns.length > 1 ? "ies have" : "y has"} a known security problem${critical.length ? `, ${critical.length} critical` : ""}${high.length ? `, ${high.length} high` : ""}.${critical.length ? " An admin reviews these before it's listed." : ""}`,
+    `${vulns.length} librar${vulns.length > 1 ? "ies have" : "y has"} a known security problem${critical.length ? `, ${critical.length} critical` : ""}${high.length ? `, ${high.length} high` : ""}.`,
     [...critical, ...high, ...vulns.filter((v) => v.sev < 7)].slice(0, 40).map((v) => `${v.pkg}: ${v.id}${v.sev ? ` (severity ${v.sev})` : ""}`),
   );
 
@@ -240,20 +242,20 @@ for (const rel of files) {
   if (EXFIL.test(t)) stealing.push(`${rel}: reads ${what.join(", ")} and sends data over the internet`);
   else touching.push(`${rel}: reads ${what.join(", ")}`);
 }
-// Uploaded packages are blocked outright. GitHub projects (an SSH client, a Git app) can have a
-// real reason, so there it's a warning a person looks at before anything is listed.
+// Uploaded packages get "failed"; GitHub projects (an SSH client, a Git app) can have a real reason,
+// so there it's a warning. Information only either way.
 if (stealing.length && !plan.package)
-  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys and also connects to the internet. An admin will look at it before it's listed.", stealing.slice(0, 20));
+  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys and also connects to the internet.", stealing.slice(0, 20));
 else if (stealing.length)
-  add("stealing", "Steals passwords or files", "failed", `The code reads ${stealing.length > 1 ? "places" : "a place"} where your computer keeps passwords or keys and sends data over the internet. Toolbay won't build or list it.`, stealing.slice(0, 20));
+  add("stealing", "Steals passwords or files", "failed", `The code reads ${stealing.length > 1 ? "places" : "a place"} where your computer keeps passwords or keys and sends data over the internet.`, stealing.slice(0, 20));
 else if (touching.length)
-  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys. An admin will look at it.", touching.slice(0, 20));
+  add("stealing", "Steals passwords or files", "warning", "The code reads a place where your computer keeps passwords or keys.", touching.slice(0, 20));
 else add("stealing", "Steals passwords or files", "passed", "Doesn't touch saved passwords, browser logins, keys or crypto wallets.");
 
 // ---- uploaded packages: Toolbay builds the app itself, so no prebuilt programs are allowed
 if (plan.package) {
   if (binaries.length)
-    add("binaries", "Prebuilt programs", "failed", `The package contains ${binaries.length} prebuilt program file${binaries.length > 1 ? "s" : ""}. Toolbay builds apps from source only, so what's checked is what's shipped.`, binaries.slice(0, 20));
+    add("binaries", "Prebuilt programs", "failed", `The package contains ${binaries.length} prebuilt program file${binaries.length > 1 ? "s" : ""}. Toolbay builds apps from source; these files aren't used.`, binaries.slice(0, 20));
   else add("binaries", "Prebuilt programs", "passed", "Source code only. Toolbay builds the app itself.");
 }
 
@@ -264,7 +266,7 @@ const status = failed.length ? "failed" : "passed";
 const summary = failed.length
   ? failed.map((c) => c.summary).join(" ")
   : warnings.length
-    ? `Passed with ${warnings.length} thing${warnings.length > 1 ? "s" : ""} to review: ${warnings.map((w) => w.label.toLowerCase()).join(", ")}.`
+    ? `Passed with ${warnings.length} thing${warnings.length > 1 ? "s" : ""} to note: ${warnings.map((w) => w.label.toLowerCase()).join(", ")}.`
     : "Passed: open-source license, no leaked keys, no known malware, no unsafe libraries found.";
 const result = { status, blocked, summary, license: spdx || null, checkedAt: new Date().toISOString(), checks, endpoints };
 fs.writeFileSync(outPath, JSON.stringify(result, null, 2));

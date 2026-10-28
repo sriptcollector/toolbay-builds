@@ -4,7 +4,9 @@
 #   gh workflow run build.yml -R sriptcollector/toolbay-builds -f build_id=test1 -f repo=owner/name -f sha=<commit>
 #
 # 1. inspect  (Linux)  detect the project type, check the license, run the privacy and security check.
-#                      Stops here, before running any of the project's code, if it isn't safe or supported.
+#                      The check is information only (privacy.json, shown on the tool page); it never stops
+#                      the build (2026-10-27, Orion: uploads go live without a security check). Stops here
+#                      only if the project type isn't supported.
 # 2. build    (Windows + Mac)  run the project's build and package it. No secrets reach this job:
 #                      it runs untrusted code with a read-only token.
 # 3. publish  (Linux)  attach the files and toolbay.json to release b-<build_id> and tell toolbay.ai.
@@ -165,9 +167,10 @@ jobs:
       - name: Privacy and security check
         id: verdict
         run: |
-          node tb/scripts/scan.mjs src plan.json privacy.json
-          blocked=$(jq -r .blocked privacy.json)
-          echo "ok=$([ "$blocked" = "false" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          node tb/scripts/scan.mjs src plan.json privacy.json || echo '{"status":"failed","blocked":false,"summary":"The privacy check didn'"'"'t finish.","checks":[],"endpoints":[]}' > privacy.json
+          # Information only: privacy.json's "blocked" no longer stops the build. Only an unsupported project does.
+          supported=$(jq -r .supported plan.json)
+          echo "ok=$([ "$supported" = "true" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           jq -n --slurpfile p plan.json --slurpfile s privacy.json '{plan: $p[0], privacy: $s[0]}' > report.json
           icon=$(jq -r '.icon // empty' plan.json)
           if [ -n "$icon" ] && [ -f "src/$icon" ]; then
@@ -184,7 +187,7 @@ jobs:
             report.json
             icon.png
 
-      # The build jobs get the exact, already-checked package (they have no secret to download it).
+      # The build jobs get the exact package that was inspected (they have no secret to download it).
       - uses: actions/upload-artifact@v4
         if: inputs.source_url != '' && steps.verdict.outputs.ok == 'true'
         with:
@@ -198,16 +201,9 @@ jobs:
           if [ "${{ steps.verdict.outputs.ok }}" = "true" ]; then
             node tb/scripts/notify.mjs building "Building the app" report.json
           else
-            supported=$(jq -r .supported plan.json)
-            if [ "$supported" = "false" ]; then
-              jq '. + {message: .plan.reason}' report.json > r.json
-              echo "::notice title=toolbay-unsupported::$(jq -r .reason plan.json)"
-              node tb/scripts/notify.mjs unsupported "Not supported yet" r.json
-            else
-              jq '. + {message: .privacy.summary}' report.json > r.json
-              echo "::notice title=toolbay-failed::$(jq -r .summary privacy.json)"
-              node tb/scripts/notify.mjs failed "Didn't pass the safety check" r.json
-            fi
+            jq '. + {message: .plan.reason}' report.json > r.json
+            echo "::notice title=toolbay-unsupported::$(jq -r .reason plan.json)"
+            node tb/scripts/notify.mjs unsupported "Not supported yet" r.json
           fi
 
   build:

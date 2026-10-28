@@ -3,7 +3,7 @@
 // open it, see that it stays up, take a screenshot, close it, uninstall it.
 // Usage: node launchtest.mjs <out dir>   (reads out/entry-<platform>.json from package.mjs)
 // Writes out/compat-<platform>.json and out/screenshot-<platform>.png (when it opened).
-// A build that doesn't open is moved aside (entry -> blocked-entry) so it isn't published.
+// Information only (2026-10-27): a build that doesn't open is still published; the result shows on the tool page.
 import { execFileSync, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -201,11 +201,4 @@ try {
 result.seconds = Math.round((Date.now() - t0) / 1000);
 fs.writeFileSync(path.join(out, `compat-${platform}.json`), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));
-if (!result.ok) {
-  // Don't publish a build that doesn't open; keep it for the build log.
-  fs.renameSync(path.join(out, entryFile), path.join(out, `blocked-${entryFile}`));
-  fs.writeFileSync(
-    path.join(out, `error-${platform}.json`),
-    JSON.stringify({ platform, message: `It built, but on a test computer: ${result.note}`, detail: result.note }, null, 2),
-  );
-}
+if (!result.ok) console.log(`launch test didn't pass (${result.note}); publishing anyway, the result is information only`);
